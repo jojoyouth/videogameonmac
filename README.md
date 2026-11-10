@@ -1,6 +1,6 @@
 # vgm — 在 Apple Silicon Mac 上玩 Steam Windows 遊戲
 
-一支約 250 行的 shell 腳本,把 Windows 版 Steam 跑在 M 系列 Mac(M5 Air 等)上。
+一支不到 300 行的 shell 腳本,把 Windows 版 Steam 跑在 M 系列 Mac(M5 Air 等)上。
 
 ```
 Windows 遊戲 (x86-64)
