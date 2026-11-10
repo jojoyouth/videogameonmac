@@ -8,6 +8,7 @@ set -euo pipefail
 
 # ── 路徑 ────────────────────────────────────────────────────────────────
 self="$0"
+ME="$0" # 提示訊息裡顯示使用者實際輸入的指令(例如 ./vgm)
 while [ -L "$self" ]; do
   link="$(readlink "$self")"
   case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
@@ -41,13 +42,13 @@ find_wine() {
 }
 
 need_wine() {
-  WINE="$(find_wine)" || die "找不到 Wine,請先執行:vgm setup"
+  WINE="$(find_wine)" || die "找不到 Wine,請先執行:$ME setup"
   WINESERVER="$(dirname "$WINE")/wineserver"
 }
 
 need_steam() {
   need_wine
-  [ -f "$STEAM_EXE" ] || die "尚未安裝 Steam,請先執行:vgm setup"
+  [ -f "$STEAM_EXE" ] || die "尚未安裝 Steam,請先執行:$ME setup"
 }
 
 # ── 設定檔 (profile) 與圖形後端 (backend) ───────────────────────────────
@@ -154,14 +155,14 @@ cmd_doctor() {
     [ "${ver%%.*}" -ge 15 ] && r=0 || r=1
     check "macOS $ver" $r "建議升級到 macOS 15 以上(AVX 支援)"
     arch -x86_64 /usr/bin/true 2>/dev/null && r=0 || r=1
-    check "Rosetta 2" $r "執行 vgm setup"
+    check "Rosetta 2" $r "執行 $ME setup"
   fi
   wine="$(find_wine)" && r=0 || r=1
-  check "Wine${wine:+:$wine}" $r "執行 vgm setup"
+  check "Wine${wine:+:$wine}" $r "執行 $ME setup"
   [ -f "$WINEPREFIX/system.reg" ] && r=0 || r=1
-  check "Wine 環境:$WINEPREFIX" $r "執行 vgm setup"
+  check "Wine 環境:$WINEPREFIX" $r "執行 $ME setup"
   [ -f "$STEAM_EXE" ] && r=0 || r=1
-  check "Windows 版 Steam" $r "執行 vgm setup"
+  check "Windows 版 Steam" $r "執行 $ME setup"
   echo "  圖形後端:$(list_backends)"
   return $ok
 }
@@ -200,7 +201,7 @@ cmd_setup() {
     rm -f "$installer"
   fi
 
-  say "完成!執行 vgm steam 開啟 Steam。"
+  say "完成!執行 $ME steam 開啟 Steam。"
 }
 
 cmd_steam() {

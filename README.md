@@ -40,6 +40,15 @@ cd videogameonmac && ./vgm setup
 
 登入 Steam 後照平常的方式下載、按「開始遊戲」即可。
 
+想在任何目錄直接打 `vgm`(不用 `./`),建一個捷徑:
+
+```bash
+ln -s "$PWD/vgm" "$(brew --prefix)/bin/vgm"
+```
+
+**已經有 Mac 版 Steam?** 兩個都留著。Mac 版只能下載有 macOS 版本的遊戲;只有 Windows 版的遊戲
+要從這裡的 Windows 版 Steam 下載。同一個帳號、同一個遊戲庫,有 Mac 原生版的遊戲用 Mac 版 Steam 玩會更快。
+
 ## 指令
 
 | 指令 | 作用 |
