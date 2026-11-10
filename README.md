@@ -1,6 +1,6 @@
 # vgm — 在 Apple Silicon Mac 上玩 Steam Windows 遊戲
 
-一支不到 300 行的 shell 腳本,把 Windows 版 Steam 跑在 M 系列 Mac(M5 Air 等)上。
+一支約 400 行的 shell 腳本,把 Windows 版 Steam 跑在 M 系列 Mac(M5 Air 等)上。
 
 ```
 Windows 遊戲 (x86-64)
@@ -15,8 +15,9 @@ Apple GPU
 因為沒有模擬整台電腦。`vgm` 本身不做任何轉譯,只負責安裝、設定環境變數、啟動,然後就把自己換成 Wine
 行程 (`exec`) —— 沒有常駐程式、沒有 GUI、沒有相依套件,只用 macOS 內建的 bash。
 
-> ⚠️ 這個專案是在 Linux 上用假的 Wine 測試邏輯,**尚未在真正的 Mac 上跑過**。
-> 第一次使用若遇到問題,請看最下面的「疑難排解」。
+> ⚠️ **此專案已停止開發(2026-11-10)。** 在 M5 MacBook Air(macOS 27)上實測的最終狀態:
+> Steam 的行程在 Wine 9.0 上可以持續執行、D3DMetal 的 DLL 可以載入,但使用者端仍然無法正常開啟使用,
+> 沒有任何遊戲實際跑起來過。過程中查到的根因與版本限制記在下面「為什麼要兩個 Wine」,留給之後想走這條路的人參考。
 
 ## 快速開始
 
@@ -34,9 +35,25 @@ cd videogameonmac && ./vgm setup
 ./vgm steam
 ```
 
-`setup` 會依序安裝 Rosetta 2、Game Porting Toolkit(Wine + D3DMetal,來自
-[Gcenx 的 Homebrew cask](https://github.com/Gcenx/game-porting-toolkit))、建立虛擬 C: 槽,
-並安裝 Windows 版 Steam。每一步都會先檢查,重複執行不會重裝。
+`setup` 會依序安裝 Rosetta 2、Game Porting Toolkit(提供 D3DMetal,來自
+[Gcenx 的 Homebrew cask](https://github.com/Gcenx/game-porting-toolkit))、Wine 9.0(下載到 `~/.vgm/wine`)、
+建立虛擬 C: 槽,並安裝 Windows 版 Steam。每一步都會先檢查,重複執行不會重裝。
+第一次開 Steam 會先自我更新,要等幾分鐘才會出現登入視窗。
+
+### 為什麼要兩個 Wine
+
+Game Porting Toolkit 的 cask 版本寫 3.0,但那是 **D3DMetal** 的版本,裡面附的 Wine 本體是 2022 年的 7.7。
+2026 年的 64 位元 Steam 會用到 Wine 7.7 沒有的加密 API(`BCRYPT_RNG_ALG_HANDLE`),一啟動就當機。
+反過來,太新的 Wine(9.10 以後)又拿掉了 D3DMetal 需要的 `__wine_unix_call` 介面,D3DMetal 掛不上去。
+
+| Wine 版本 | 新版 Steam | D3DMetal |
+| --- | --- | --- |
+| 7.7(Game Porting Toolkit 內建) | 當機 | 可以 |
+| **9.0(vgm 使用)** | 可以 | 可以 |
+| 10、11 | 可以 | 載不進去 |
+
+所以 `vgm` 用的是 Wine 9.0([Sikarugir 以 CrossOver 開放原始碼編譯的免費版本](https://github.com/Sikarugir-App/Engines)),
+Game Porting Toolkit 只拿來提供 D3DMetal 和幾個共用函式庫。
 
 登入 Steam 後照平常的方式下載、按「開始遊戲」即可。
 
@@ -63,6 +80,7 @@ ln -s "$PWD/vgm" "$(brew --prefix)/bin/vgm"
 | `vgm log` | 顯示執行中的 Windows 程式與上次啟動的紀錄 |
 | `vgm kill` | 關閉所有 Windows 程式 |
 | `vgm wine <參數>` | 直接呼叫 Wine,例如 `vgm wine winecfg` |
+| `vgm uninstall` | 移除 vgm 安裝的所有東西(`-n` 只列出、`-y` 不逐項詢問) |
 
 ## 針對單一遊戲調整(設定檔)
 
@@ -99,7 +117,7 @@ backend_install() {                   # 選用:vgm backend install mylayer <目�
 - **dxvk**(實驗性)—— DirectX 9/10/11 走 Vulkan/MoltenVK,給 D3DMetal 跑不好的舊遊戲。
   需自行下載 [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS/releases) 後執行 `vgm backend install dxvk <目錄>`。
 
-要換 Wine 版本(例如 CrossOver 或自己編譯的),設 `VGM_WINE=/path/to/wine` 即可。
+要換 Wine 版本(例如自己編譯的),設 `VGM_WINE=/path/to/wine` 即可;版本限制見上面「為什麼要兩個 Wine」。
 
 ## 哪些能玩、哪些不能
 
@@ -130,10 +148,28 @@ Air 沒有風扇,長時間高負載會過熱降頻,所以重點是**降低 GPU �
 
 - **先跑 `vgm doctor`**,它會告訴你缺什麼。
 - **看紀錄:** `vgm kill` 後用 `VGM_DEBUG=1 vgm steam` 重跑,再執行 `vgm log`。
-- **打了 `vgm steam` 沒反應:** 多半是上一次的 Steam 還卡在背景,先 `vgm kill` 再開。
+- **打了 `vgm steam` 沒反應或立刻結束:** 先 `vgm kill` 再開。還是一樣就看紀錄裡有沒有
+  `Unhandled page fault`;若 `vgm doctor` 顯示的 Wine 不在 `~/.vgm/wine` 底下,代表用到了不相容的 Wine。
+  Steam 自己的紀錄在 `~/.vgm/prefix/drive_c/Program Files (x86)/Steam/logs/`,`bootstrap_log.txt` 最有用。
 - **Steam 視窗全黑或空白:** 在 `~/.config/vgm/profiles/default.conf` 寫入 `STEAM_ARGS="-cef-disable-gpu"`。
+  (正常情況下 Steam 會自己偵測並關閉介面的 GPU 加速,不需要這個參數。)
 - **遊戲一開就閃退:** 多半是反作弊(見上)或缺少執行階段元件;從紀錄檔找線索,或換 `BACKEND=dxvk` 試試。
 - **整個重來:** `vgm kill && rm -rf ~/.vgm`,再跑一次 `vgm setup`(遊戲需重新下載)。
+
+## 完整移除
+
+```bash
+./vgm uninstall -n
+```
+
+先用 `-n` 看會移除哪些東西,確認後再執行 `./vgm uninstall`(逐項詢問,預設不刪)。它只處理 vgm 自己建立的東西:
+
+- `~/.vgm`(Windows 環境、遊戲、存檔、Wine)與 `~/.config/vgm`(自訂設定)
+- PATH 上指向這支腳本的 `vgm` 捷徑
+- Homebrew 的 `game-porting-toolkit` cask 與 `gcenx/wine` tap
+
+不會動 Rosetta 2、Homebrew 本身、Mac 版 Steam 或其他任何檔案;要刪除的目錄必須在家目錄底下且名稱含 `vgm`,否則拒絕。
+專案目錄本身不會自動刪,最後會印出指令讓你自己執行。
 
 ## 開發
 
@@ -141,7 +177,7 @@ Air 沒有風扇,長時間高負載會過熱降頻,所以重點是**降低 GPU �
 tests/run.sh
 ```
 
-測試用假的 Wine 驗證參數與環境變數是否正確,不需要 Mac。
+測試用假的 Wine 驗證參數與環境變數是否正確,不需要 Mac。Steam 正在執行時有一項「不重啟」的測試會失敗,先 `vgm kill` 再跑。
 
 | 路徑 | 內容 |
 | --- | --- |

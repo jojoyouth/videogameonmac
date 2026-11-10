@@ -4,16 +4,22 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-export HOME="$T/home" VGM_HOME="$T/vgm" VGM_CONFIG="$T/config" VGM_WINE="$T/bin/wine"
+export HOME="$T/home" VGM_HOME="$T/vgm" VGM_CONFIG="$T/config" VGM_WINE="$T/bin/wine" VGM_GPTK="$T/gptk"
 unset WINEPREFIX WINEDLLOVERRIDES MTL_HUD_ENABLED
 STEAM_DIR="$VGM_HOME/prefix/drive_c/Program Files (x86)/Steam"
 mkdir -p "$HOME" "$T/bin" "$STEAM_DIR/steamapps" "$VGM_CONFIG/profiles" "$VGM_HOME/prefix/drive_c/windows/system32"
 touch "$STEAM_DIR/steam.exe"
 
+# 假的 Game Porting Toolkit:一個 D3DMetal 元件 (d3d11) 加一個不相干的 Wine DLL (kernel32)
+mkdir -p "$VGM_GPTK/lib/external/D3DMetal.framework" "$VGM_GPTK/lib/wine/x86_64-unix" "$VGM_GPTK/lib/wine/x86_64-windows"
+touch "$VGM_GPTK/lib/external/libd3dshared.dylib" "$VGM_GPTK/lib/wine/x86_64-unix/kernel32.so"
+touch "$VGM_GPTK/lib/wine/x86_64-windows/d3d11.dll" "$VGM_GPTK/lib/wine/x86_64-windows/kernel32.dll"
+ln -s ../../external/libd3dshared.dylib "$VGM_GPTK/lib/wine/x86_64-unix/d3d11.so"
+
 # 假 Wine:把收到的參數與環境變數記下來
 cat >"$T/bin/wine" <<'W'
 #!/bin/bash
-{ printf 'ARGS:'; printf ' [%s]' "$@"; echo; env | grep -E '^(WINE|MTL_|D3DM_|DXVK_|ROSETTA_)' | sort; } >"$VGM_HOME/call"
+{ printf 'ARGS:'; printf ' [%s]' "$@"; echo; env | grep -E '^(WINE|MTL_|D3DM_|DXVK_|ROSETTA_|CX_)' | sort; } >"$VGM_HOME/call"
 W
 cat >"$T/bin/wineserver" <<'W'
 #!/bin/bash
@@ -36,6 +42,9 @@ t "steam:預設關閉除錯輸出" has "WINEDEBUG=-all"
 t "steam:開啟 esync/msync 與 AVX" has "ROSETTA_ADVERTISE_AVX=1"
 t "steam:d3dmetal 後端開啟 MetalFX" has "D3DM_ENABLE_METALFX=1"
 t "steam:預設不顯示 HUD" hasnt "MTL_HUD_ENABLED"
+t "d3dmetal:讓 Wine 優先載入 D3DMetal 的 DLL" has "WINEDLLPATH_PREPEND=$VGM_HOME/d3dmetal/wine"
+t "d3dmetal:連結 D3DMetal 元件" test -e "$VGM_HOME/d3dmetal/wine/x86_64-windows/d3d11.dll" -a -e "$VGM_HOME/d3dmetal/wine/x86_64-unix/d3d11.so"
+t "d3dmetal:不連結 Wine 7.7 自己的 DLL" test ! -e "$VGM_HOME/d3dmetal/wine/x86_64-windows/kernel32.dll"
 
 vgm play 570 -novid
 t "play:使用 -applaunch" has "[-applaunch] [570] [-novid]"
@@ -75,6 +84,24 @@ echo 'BACKEND=nope' >"$VGM_CONFIG/profiles/1.conf"
 t "錯誤:未知後端" bash -c "! '$ROOT/vgm' play 1"
 t "錯誤:appid 不是數字" bash -c "! '$ROOT/vgm' play abc"
 t "錯誤:未知指令" bash -c "! '$ROOT/vgm' bogus"
+
+# uninstall:只刪 vgm 自己的目錄,其他東西不能動。
+# 用假的 brew 避免碰到真的 Homebrew;用複製出來的 vgm 跑,這樣真機 PATH 上指向本專案的捷徑不會被當成目標。
+mkdir -p "$T/app" && cp -R "$ROOT/vgm" "$ROOT/backends" "$ROOT/profiles" "$T/app/"
+UV="$T/app/vgm"
+printf '#!/bin/bash\nexit 1\n' >"$T/bin/brew"; chmod +x "$T/bin/brew"
+mkdir -p "$HOME/Documents" && echo keep >"$HOME/Documents/keep.txt"
+PATH="$T/bin:$PATH" "$UV" uninstall -n >/dev/null
+t "uninstall -n:試跑不刪任何東西" test -d "$VGM_HOME" -a -d "$VGM_CONFIG"
+t "uninstall:拒絕名稱不含 vgm 的目錄" bash -c "VGM_HOME='$HOME/Documents' PATH='$T/bin:$PATH' '$UV' uninstall -y >/dev/null 2>&1; test -f '$HOME/Documents/keep.txt'"
+t "uninstall:拒絕家目錄本身" bash -c "VGM_HOME='$HOME' PATH='$T/bin:$PATH' '$UV' uninstall -n >/dev/null 2>&1; test -d '$HOME'"
+mkdir -p "$HOME/.vgm/prefix" "$HOME/.config/vgm/profiles"
+U() { VGM_HOME="$HOME/.vgm" VGM_CONFIG="$HOME/.config/vgm" PATH="$T/bin:$PATH" "$UV" uninstall "$@"; }
+echo n | U >/dev/null 2>&1
+t "uninstall:回答 n 就不刪" test -d "$HOME/.vgm" -a -d "$HOME/.config/vgm"
+U -y >/dev/null 2>&1
+t "uninstall -y:刪除資料與設定目錄" test ! -e "$HOME/.vgm" -a ! -e "$HOME/.config/vgm"
+t "uninstall -y:不動其他檔案" test -f "$HOME/Documents/keep.txt" -a -d "$HOME/.config"
 rm "$STEAM_DIR/steam.exe"
 t "錯誤:沒裝 Steam 時提示 setup" bash -c "'$ROOT/vgm' steam 2>&1 | grep -q 'vgm setup'"
 

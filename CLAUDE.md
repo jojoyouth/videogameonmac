@@ -11,33 +11,27 @@
 - `tests/run.sh` — 用假的 Wine 驗證參數與環境變數,改完 `vgm` 一定要跑。
 
 資料位置:Wine 環境在 `~/.vgm/prefix`,啟動紀錄在 `~/.vgm/logs/last.log`。
-Wine 來自 Homebrew cask `gcenx/wine/game-porting-toolkit`,安裝在 `/Applications/Game Porting Toolkit.app`。
+Wine 是 9.0(Sikarugir 的 `WS12WineCX24.0.7_7`),由 `vgm setup` 下載到 `~/.vgm/wine/cx24`。
+Homebrew cask `gcenx/wine/game-porting-toolkit`(`/Applications/Game Porting Toolkit.app`)只用來提供 D3DMetal 與共用函式庫。
+
+## Wine 版本的限制(2026-11-10 在 M5 Air / macOS 27 實測)
+
+- cask 版本 3.0 指的是 D3DMetal;它內附的 Wine 是 7.7,**不能用**:64 位元 Steam 呼叫
+  `BCryptGenRandom(BCRYPT_RNG_ALG_HANDLE)`,Wine 8.0 以前的 bcrypt.dll 會把 0x81 當指標讀而當機。
+- D3DMetal 的橋接 DLL 匯入 `ntdll.__wine_unix_call`,Wine 9.10 以後移除 → Wine 10/11 掛不上 D3DMetal。
+- 所以只能用 Wine 8.0–9.0。換 Wine 版本前先用 `objdump -p ntdll.dll | grep __wine_unix_call` 確認。
+- 這份 Wine 不自帶 dylib,`need_wine` 用 `DYLD_FALLBACK_LIBRARY_PATH` 借用 GPTK 的;
+  macOS 會清掉經過 `/bin/bash` 傳入的 `DYLD_*`,所以只能在腳本內設定。
+- D3DMetal 透過 `WINEDLLPATH_PREPEND` 掛上(見 `backends/d3dmetal.sh`),連結目錄在 `~/.vgm/d3dmetal`。
+- 已驗證:steam.exe 與 steamwebhelper 行程可持續存活、D3DMetal 的 d3d11/dxgi 可載入並初始化。
+- **未解決:使用者回報 Steam 仍然「開不起來」**(行程活著但無法正常使用,原因未查);沒有任何遊戲實際跑過。
+- **專案已於 2026-11-10 由使用者決定作廢**,本機安裝的東西已用 `vgm uninstall` 移除。
+- Steam 自我更新時原行程以代碼 42 結束,屬正常;`launch` 已特別處理。
+- 跑 `tests/run.sh` 前先 `vgm kill`,否則「Steam 沒在跑時不重啟」那一項會因為真的 Steam 而失敗。
+  測試裡的 uninstall 一律用複製到暫存目錄的腳本執行,不要改回直接跑專案的 `vgm`(會刪到真機的捷徑)。
 
 ## 原則
 
 - 保持精簡:不加常駐程式、GUI、額外相依套件。新功能優先做成 backend 或 profile。
 - 註解、訊息、README 用繁體中文。
 - 在 `claude/admiring-clarke-kcqlz5` 分支開發,不要自行開 PR。
-
-## 目前待解的問題(解決後請刪除這一節)
-
-狀態(2026-11-10,M5 MacBook Air):`./vgm setup` 成功,Game Porting Toolkit 3.0-3 與 Windows 版 Steam 都已安裝。
-
-症狀:第一次 `vgm steam` 出現 Steam 的更新視窗,更新完成後主視窗/登入視窗沒有出現。
-之後再執行 `vgm steam` 會立刻結束且沒有任何輸出(結束代碼 0)。
-
-尚未驗證的推測:
-
-1. `steamwebhelper`(Steam 介面用的 Chromium 元件)在這版 Wine 起不來,所以沒有視窗。
-2. 之後的 `vgm steam` 立刻結束,是因為背景還有卡住的 Steam,新行程把訊息轉過去就退出了。
-
-這份腳本先前只在 Linux 上用假的 Wine 測過,這是第一次在真機上跑,`vgm` 本身有 bug 也有可能。
-
-建議的診斷步驟:
-
-1. `./vgm log` 看有哪些 Windows 行程還在、上次的紀錄寫了什麼。
-2. `./vgm kill`,再 `VGM_DEBUG=1 ./vgm steam` 重現,從 `~/.vgm/logs/last.log` 找 steamwebhelper 的錯誤。
-   也看 `~/.vgm/prefix/drive_c/Program Files (x86)/Steam/logs/` 下 Steam 自己的紀錄。
-3. 逐一嘗試啟動參數,例如 `./vgm steam -cef-disable-gpu`(參數會直接傳給 steam.exe)。
-4. 找到可行的做法後,寫進 `profiles/default.conf` 的 `STEAM_ARGS` 或 `vgm` 本身,更新 README 的疑難排解,
-   並移除 README 開頭「尚未在真正的 Mac 上跑過」的警語。

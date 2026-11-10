@@ -19,7 +19,14 @@ VGM_CONFIG="${VGM_CONFIG:-$HOME/.config/vgm}"           # 使用者自訂 backen
 export WINEPREFIX="${WINEPREFIX:-$VGM_HOME/prefix}"     # 虛擬 C: 槽
 STEAM_EXE="$WINEPREFIX/drive_c/Program Files (x86)/Steam/steam.exe"
 STEAM_SETUP_URL="https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
+# 需要兩樣東西(原因見 README「為什麼要兩個 Wine」):
+#   1. Wine 9.0(CrossOver 開源碼的社群編譯版):跑得動新版 64 位元 Steam,也還相容 D3DMetal。
+#   2. Game Porting Toolkit cask:只取用裡面的 D3DMetal 與 freetype/gnutls 等函式庫,不用它的 Wine 7.7。
+WINE_URL="https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS12WineCX24.0.7_7.tar.xz"
+WINE_SHA256="203f9e9fd6c2cc77e6525d798a434ced326145db34a356355e05659d3445fd1c"
+WINE_DIR="$VGM_HOME/wine/cx24"
 WINE_CASK="gcenx/wine/game-porting-toolkit"
+GPTK="${VGM_GPTK:-/Applications/Game Porting Toolkit.app/Contents/Resources/wine}"
 STATE="$VGM_HOME/active-profile"
 LOG="$VGM_HOME/logs/last.log"
 
@@ -28,15 +35,11 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ── Wine ────────────────────────────────────────────────────────────────
-# 依序找可用的 Wine;要用別的版本就設 VGM_WINE=/path/to/wine。
+# 找可用的 Wine;要用別的版本就設 VGM_WINE=/path/to/wine。
+# 不會自動使用 Game Porting Toolkit 內建的 Wine 7.7:新版 Steam 在它上面一啟動就當機。
 find_wine() {
   local c
-  for c in "${VGM_WINE:-}" \
-    "/Applications/Game Porting Toolkit.app/Contents/Resources/wine/bin/wine64" \
-    "$HOME/Applications/Game Porting Toolkit.app/Contents/Resources/wine/bin/wine64" \
-    "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" \
-    "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine" \
-    "$(command -v wine64 || true)" "$(command -v wine || true)"; do
+  for c in "${VGM_WINE:-}" "$WINE_DIR/wswine.bundle/bin/wine"; do
     if [ -n "$c" ] && [ -x "$c" ]; then echo "$c"; return 0; fi
   done
   return 1
@@ -45,6 +48,9 @@ find_wine() {
 need_wine() {
   WINE="$(find_wine)" || die "找不到 Wine,請先執行:$ME setup"
   WINESERVER="$(dirname "$WINE")/wineserver"
+  # 這份 Wine 不自帶 freetype、gnutls 等函式庫,借用 Game Porting Toolkit 裡的。
+  # 必須在腳本內設定:macOS 會把經過 /bin/bash 傳進來的 DYLD_* 變數清掉。
+  export DYLD_FALLBACK_LIBRARY_PATH="$GPTK/lib:/usr/lib"
 }
 
 need_steam() {
@@ -137,7 +143,14 @@ launch() { # launch <exe> [參數...]
   if [ "${VGM_DEBUG:-0}" != 1 ]; then export WINEDEBUG="${WINEDEBUG:--all}"; fi
   mkdir -p "$VGM_HOME/logs"
   local code=0
-  "$WINE" "$@" >"$LOG" 2>&1 || code=$?
+  # 先清空再用附加模式寫入:還在背景跑的 Steam 也握著這個檔案,不用附加模式會寫出一大段空洞
+  : >"$LOG"
+  "$WINE" "$@" >>"$LOG" 2>&1 || code=$?
+  if [ $code = 42 ]; then
+    # Steam 自我更新時,原本的行程會以代碼 42 結束,新的 Steam 在背景接手,不是錯誤
+    say "Steam 正在自我更新,完成後視窗會自己出現(第一次約需幾分鐘)"
+    return 0
+  fi
   if [ $code != 0 ]; then
     warn "程式異常結束(代碼 $code),最後的輸出:"
     tail -n 20 "$LOG" >&2
@@ -164,6 +177,8 @@ cmd_doctor() {
   fi
   wine="$(find_wine)" && r=0 || r=1
   check "Wine${wine:+:$wine}" $r "執行 $ME setup"
+  [ -d "$GPTK/lib/external/D3DMetal.framework" ] && r=0 || r=1
+  check "D3DMetal(Game Porting Toolkit)" $r "執行 $ME setup"
   [ -f "$WINEPREFIX/system.reg" ] && r=0 || r=1
   check "Wine 環境:$WINEPREFIX" $r "執行 $ME setup"
   [ -f "$STEAM_EXE" ] && r=0 || r=1
@@ -180,10 +195,20 @@ cmd_setup() {
     softwareupdate --install-rosetta --agree-to-license
   fi
 
-  if ! find_wine >/dev/null; then
-    command -v brew >/dev/null || die "請先安裝 Homebrew (https://brew.sh),或用 VGM_WINE 指定現有的 Wine"
-    say "安裝 Game Porting Toolkit(Wine + D3DMetal)…"
+  if [ ! -d "$GPTK/lib/external/D3DMetal.framework" ]; then
+    command -v brew >/dev/null || die "請先安裝 Homebrew (https://brew.sh)"
+    say "安裝 Game Porting Toolkit(提供 D3DMetal)…"
     brew install --cask "$WINE_CASK"
+  fi
+
+  if ! find_wine >/dev/null; then
+    say "下載 Wine 9.0(約 170 MB)…"
+    local tar="$VGM_HOME/wine.tar.xz"
+    mkdir -p "$WINE_DIR"
+    curl -fL --progress-bar -o "$tar" "$WINE_URL"
+    [ "$(shasum -a 256 "$tar" | cut -d' ' -f1)" = "$WINE_SHA256" ] || die "下載的 Wine 檢查碼不符,已保留在 $tar"
+    tar -xf "$tar" -C "$WINE_DIR"
+    rm -f "$tar"
   fi
   need_wine
 
@@ -278,6 +303,86 @@ cmd_kill() { need_wine; "$WINESERVER" -k || true; rm -f "$STATE"; say "已關閉
 
 cmd_wine() { need_wine; exec "$WINE" "$@"; }
 
+# ── 移除 ────────────────────────────────────────────────────────────────
+# 只碰 vgm 自己建立的東西,每一項都先列出、再逐項確認(-y 全部同意,-n 只列出不刪)。
+# 不會動:Rosetta 2、Homebrew 本身、Mac 版 Steam、其他任何檔案。
+confirm() { # confirm <問題>;回傳 0 表示同意
+  local a
+  if [ "$UN_MODE" = dry ]; then echo "  (試跑,未執行)"; return 1; fi
+  if [ "$UN_MODE" = yes ]; then return 0; fi
+  printf '  %s [y/N] ' "$1"
+  read -r a || a=""
+  case "$a" in y | Y | yes) return 0 ;; *) echo "  略過"; return 1 ;; esac
+}
+
+# 只允許刪除「家目錄底下、至少兩層深、不是符號連結」的目錄,其餘一律拒絕。
+remove_dir() { # remove_dir <目錄> <說明>
+  local d="$1" real
+  [ -e "$d" ] || return 0
+  say "$2:$d($(du -sh "$d" 2>/dev/null | cut -f1))"
+  if [ -L "$d" ] || [ ! -d "$d" ]; then warn "不是一般目錄,為安全起見不處理"; return 0; fi
+  real="$(cd "$d" && pwd -P)"
+  case "$(basename "$real")" in
+    *vgm*) ;;
+    *) warn "目錄名稱不含 vgm,為安全起見不處理"; return 0 ;;
+  esac
+  case "$real" in
+    "$HOME_REAL"/*/* | "$HOME_REAL"/.[!.]*) ;;
+    *) warn "不在家目錄底下或層級太淺,為安全起見不處理"; return 0 ;;
+  esac
+  if confirm "刪除?"; then rm -rf "$real" && echo "  已刪除"; fi
+}
+
+cmd_uninstall() {
+  UN_MODE=ask
+  case "${1:-}" in
+    -y) UN_MODE=yes ;;
+    -n) UN_MODE=dry ;;
+    "") ;;
+    *) die "用法:vgm uninstall [-n 只列出 | -y 不逐項詢問]" ;;
+  esac
+  HOME_REAL="$(cd "$HOME" && pwd -P)"
+
+  # 1. 先關掉還在跑的 Windows 程式(只針對 vgm 自己的 Wine 環境)
+  if [ "$UN_MODE" != dry ] && find_wine >/dev/null 2>&1 && [ -d "$WINEPREFIX" ]; then
+    need_wine
+    "$WINESERVER" -k 2>/dev/null || true
+  fi
+
+  # 2. 資料:Wine 環境(含已下載的遊戲與存檔)、自行下載的 Wine、紀錄
+  remove_dir "$VGM_HOME" "vgm 資料(Windows 環境、遊戲、存檔、Wine)"
+  # 3. 使用者自訂的設定檔與後端
+  remove_dir "$VGM_CONFIG" "vgm 自訂設定"
+
+  # 4. PATH 上的捷徑:只刪「指向這支腳本的符號連結」
+  local dir link
+  for dir in /opt/homebrew/bin /usr/local/bin "$HOME/bin" "$HOME/.local/bin"; do
+    link="$dir/vgm"
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$VGM_ROOT/vgm" ]; then
+      say "捷徑:$link"
+      if confirm "刪除?"; then rm -f "$link" && echo "  已刪除"; fi
+    fi
+  done
+
+  # 5. setup 用 Homebrew 裝的 Game Porting Toolkit 與它的 tap
+  if command -v brew >/dev/null && brew list --cask game-porting-toolkit >/dev/null 2>&1; then
+    say "Homebrew cask:game-porting-toolkit(/Applications/Game Porting Toolkit.app)"
+    if confirm "移除?"; then
+      brew uninstall --cask "$WINE_CASK" || warn "移除失敗,請手動執行:brew uninstall --cask $WINE_CASK"
+    fi
+  fi
+  if command -v brew >/dev/null && brew tap 2>/dev/null | grep -qx 'gcenx/wine'; then
+    say "Homebrew tap:gcenx/wine"
+    # 這個 tap 若還有其他已安裝的套件,brew 會自己拒絕
+    if confirm "移除?"; then brew untap gcenx/wine || warn "tap 仍被其他套件使用,保留"; fi
+  fi
+
+  # 6. 專案目錄本身:不自動刪,避免誤刪你改過的東西
+  say "剩下專案目錄本身,確認不需要後自行刪除:"
+  echo "  rm -rf \"$VGM_ROOT\""
+  echo "  (Rosetta 2、Homebrew、Mac 版 Steam 都沒有動)"
+}
+
 cmd_help() {
   cat <<EOF
 vgm — 在 Apple Silicon Mac 上玩 Steam Windows 遊戲
@@ -292,15 +397,16 @@ vgm — 在 Apple Silicon Mac 上玩 Steam Windows 遊戲
   vgm log [行數]             顯示執行中的 Windows 程式與上次啟動的紀錄
   vgm kill                   關閉所有 Windows 程式
   vgm wine <參數...>         直接呼叫 Wine(例:vgm wine winecfg)
+  vgm uninstall [-n|-y]      移除 vgm 安裝的所有東西(-n 只列出,-y 不逐項詢問)
 
-環境變數:VGM_DEBUG=1 詳細紀錄、VGM_WINE 指定 Wine、VGM_HOME 資料目錄(預設 ~/.vgm)
+環境變數:VGM_DEBUG=1 詳細紀錄、VGM_WINE 指定 Wine、VGM_GPTK 指定 Game Porting Toolkit、VGM_HOME 資料目錄(預設 ~/.vgm)
 EOF
 }
 
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
-  setup | steam | play | run | list | backend | doctor | log | kill | wine | help) "cmd_$cmd" "$@" ;;
+  setup | steam | play | run | list | backend | doctor | log | kill | wine | uninstall | help) "cmd_$cmd" "$@" ;;
   -h | --help) cmd_help ;;
   *) die "未知指令:$cmd(執行 vgm help 查看用法)" ;;
 esac
