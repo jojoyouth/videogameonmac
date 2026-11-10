@@ -60,6 +60,7 @@ ln -s "$PWD/vgm" "$(brew --prefix)/bin/vgm"
 | `vgm run [-p 設定檔] <exe>` | 不經 Steam 執行 exe(GOG 遊戲、安裝程式) |
 | `vgm backend list` / `install` | 管理圖形後端 |
 | `vgm doctor` | 檢查環境哪裡有問題 |
+| `vgm log` | 顯示執行中的 Windows 程式與上次啟動的紀錄 |
 | `vgm kill` | 關閉所有 Windows 程式 |
 | `vgm wine <參數>` | 直接呼叫 Wine,例如 `vgm wine winecfg` |
 
@@ -128,7 +129,8 @@ Air 沒有風扇,長時間高負載會過熱降頻,所以重點是**降低 GPU �
 ## 疑難排解
 
 - **先跑 `vgm doctor`**,它會告訴你缺什麼。
-- **看紀錄:** `VGM_DEBUG=1 vgm steam`,輸出會寫到 `~/.vgm/logs/last.log`。
+- **看紀錄:** `vgm kill` 後用 `VGM_DEBUG=1 vgm steam` 重跑,再執行 `vgm log`。
+- **打了 `vgm steam` 沒反應:** 多半是上一次的 Steam 還卡在背景,先 `vgm kill` 再開。
 - **Steam 視窗全黑或空白:** 在 `~/.config/vgm/profiles/default.conf` 寫入 `STEAM_ARGS="-cef-disable-gpu"`。
 - **遊戲一開就閃退:** 多半是反作弊(見上)或缺少執行階段元件;從紀錄檔找線索,或換 `BACKEND=dxvk` 試試。
 - **整個重來:** `vgm kill && rm -rf ~/.vgm`,再跑一次 `vgm setup`(遊戲需重新下載)。
